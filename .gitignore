@@ -1,0 +1,17 @@
+# Binary files
+Bitcoin.app
+gobtc
+**/gobtc
+*.exe
+*.dll
+*.so
+*.dylib
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Build directory
+build/
+dist/
