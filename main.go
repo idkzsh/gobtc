@@ -3,19 +3,25 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
+	"log"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/getlantern/systray"
+	"github.com/gorilla/websocket"
 )
 
-type CoinbaseResponse struct {
-	Data struct {
-		Amount string `json:"amount"`
-	} `json:"data"`
+type WebSocketMessage struct {
+	Type      string   `json:"type"`
+	ProductID string   `json:"product_id"`
+	Price     string   `json:"price"`
+	Side      string   `json:"side"`
+	Time      string   `json:"time"`
+	TradeID   int      `json:"trade_id"`
+	Size      string   `json:"size"`
+	Message   string   `json:"message"`
+	Channels  []string `json:"channels"`
+	Reason    string   `json:"reason"`
 }
 
 func main() {
@@ -27,28 +33,82 @@ func onReady() {
 	systray.SetTitle("BTC")
 	systray.SetTooltip("Bitcoin Price Tracker")
 
-	mRefresh := systray.AddMenuItem("Refresh", "Refresh Bitcoin price")
 	mQuit := systray.AddMenuItem("Quit", "Quit the app")
 
-	go func() {
-		for {
-			updatePrice()
-			time.Sleep(10 * time.Second)
-		}
-	}()
+	// Start WebSocket connection
+	go connectWebSocket()
 
 	// Handle menu events
 	go func() {
 		for {
 			select {
-			case <-mRefresh.ClickedCh:
-				updatePrice()
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				return
 			}
 		}
 	}()
+}
+
+func connectWebSocket() {
+	ws, _, err := websocket.DefaultDialer.Dial("wss://ws-feed.exchange.coinbase.com", nil)
+	if err != nil {
+		log.Fatal("WebSocket connection error:", err)
+	}
+	defer ws.Close()
+
+	fmt.Println("Connected to Coinbase WebSocket")
+
+	// Updated subscription format
+	subscribe := map[string]interface{}{
+		"type": "subscribe",
+		"channels": []interface{}{
+			map[string]interface{}{
+				"name":        "ticker",
+				"product_ids": []string{"BTC-USD"}, // We can try "BTC-CAD" here
+			},
+		},
+	}
+
+	if err := ws.WriteJSON(subscribe); err != nil {
+		log.Fatal("Subscribe error:", err)
+	}
+
+	// Listen for messages
+	for {
+		// First, read the raw message to debug
+		_, rawMsg, err := ws.ReadMessage()
+		if err != nil {
+			log.Println("WebSocket read error:", err)
+			continue
+		}
+		fmt.Printf("Raw message: %s\n", string(rawMsg))
+
+		var msg WebSocketMessage
+		if err := json.Unmarshal(rawMsg, &msg); err != nil {
+			log.Println("JSON parse error:", err)
+			continue
+		}
+
+		// Handle different message types
+		switch msg.Type {
+		case "error":
+			log.Printf("WebSocket error: %s - %s\n", msg.Message, msg.Reason)
+		case "subscriptions":
+			log.Printf("Subscribed to channels: %v\n", msg.Channels)
+		case "ticker":
+			if msg.Price != "" {
+				floatPrice, err := strconv.ParseFloat(msg.Price, 64)
+				if err != nil {
+					log.Println("Error converting price:", err)
+					continue
+				}
+
+				formattedPrice := addThousandSeparators(floatPrice)
+				systray.SetTitle(fmt.Sprintf("₿ $%s", formattedPrice))
+			}
+		}
+	}
 }
 
 func addThousandSeparators(n float64) string {
@@ -67,43 +127,6 @@ func addThousandSeparators(n float64) string {
 
 	// Combine parts
 	return integer + "." + decimal
-}
-
-func updatePrice() {
-	price, err := getBitcoinPrice()
-	if err != nil {
-		systray.SetTitle("BTC Error")
-		return
-	}
-
-	floatPrice, err := strconv.ParseFloat(price, 64)
-	if err != nil {
-		fmt.Println("Error converting price to float:", err)
-		return
-	}
-
-	formattedPrice := addThousandSeparators(floatPrice)
-	systray.SetTitle(fmt.Sprintf("₿ $%s", formattedPrice))
-}
-
-func getBitcoinPrice() (string, error) {
-	resp, err := http.Get("https://api.coinbase.com/v2/prices/BTC-CAD/spot")
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	var result CoinbaseResponse
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", err
-	}
-
-	return result.Data.Amount, nil
 }
 
 func onExit() {
