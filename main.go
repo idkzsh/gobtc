@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -29,12 +31,35 @@ type BitcoinData struct {
 	holdings     float64
 }
 
+var holdingsFile string
+
+func init() {
+	holdingsFile = getHoldingsFilePath()
+}
+
+func getHoldingsFilePath() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("Could not get home directory: %v", err)
+		return "holdings.txt" // Fallback to current directory
+	}
+
+	// Create Application Support directory if it doesn't exist
+	appSupportDir := filepath.Join(homeDir, "Library", "Application Support", "gobtc")
+	if err := os.MkdirAll(appSupportDir, 0755); err != nil {
+		log.Printf("Could not create app directory: %v", err)
+		return "holdings.txt" // Fallback to current directory
+	}
+
+	return filepath.Join(appSupportDir, "holdings.txt")
+}
+
 func main() {
 	systray.Run(onReady, onExit)
 }
 
 func onReady() {
-	data := &BitcoinData{holdings: 0.0}
+	data := &BitcoinData{holdings: loadHoldings()}
 
 	systray.SetIcon(getIcon())
 	systray.SetTitle("BTC")
@@ -49,6 +74,11 @@ func onReady() {
 	mWorth.Disable() // Make it non-clickable
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Quit the app")
+
+	// Initialize the holdings display with loaded value
+	if data.holdings > 0 {
+		mCurrentHoldings.SetTitle(fmt.Sprintf("Current Holdings: ₿%.8f", data.holdings))
+	}
 
 	// Start WebSocket connection with shared data
 	go connectWebSocket(data, mWorth)
@@ -70,7 +100,12 @@ func onReady() {
 					input := strings.TrimSpace(strings.TrimRight(parts[1], "\n"))
 					if holdings, err := strconv.ParseFloat(input, 64); err == nil {
 						data.holdings = holdings
-						// Update both holdings display and worth
+						// Save the new holdings
+						if err := saveHoldings(holdings); err != nil {
+							log.Printf("Error saving holdings: %v", err)
+						}
+
+						// Update displays
 						mCurrentHoldings.SetTitle(fmt.Sprintf("Current Holdings: ₿%.8f", data.holdings))
 						if data.currentPrice > 0 {
 							worth := data.holdings * data.currentPrice
@@ -177,4 +212,22 @@ func getIcon() []byte {
 		0xFF, 0xFF, 0xFF, 0xFF,
 		0xFF, 0xFF, 0xFF, 0xFF,
 	}
+}
+
+// Add these functions to handle file operations
+func saveHoldings(amount float64) error {
+	return os.WriteFile(holdingsFile, []byte(fmt.Sprintf("%.8f", amount)), 0644)
+}
+
+func loadHoldings() float64 {
+	data, err := os.ReadFile(holdingsFile)
+	if err != nil {
+		return 0.0 // Default to 0 if file doesn't exist
+	}
+
+	holdings, err := strconv.ParseFloat(strings.TrimSpace(string(data)), 64)
+	if err != nil {
+		return 0.0
+	}
+	return holdings
 }
