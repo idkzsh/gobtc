@@ -1,9 +1,9 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
+	"os/exec"
 	"strconv"
 	"strings"
 
@@ -12,16 +12,21 @@ import (
 )
 
 type WebSocketMessage struct {
-	Type      string   `json:"type"`
-	ProductID string   `json:"product_id"`
-	Price     string   `json:"price"`
-	Side      string   `json:"side"`
-	Time      string   `json:"time"`
-	TradeID   int      `json:"trade_id"`
-	Size      string   `json:"size"`
-	Message   string   `json:"message"`
-	Channels  []string `json:"channels"`
-	Reason    string   `json:"reason"`
+	Type      string        `json:"type"`
+	ProductID string        `json:"product_id"`
+	Price     string        `json:"price"`
+	Side      string        `json:"side"`
+	Time      string        `json:"time"`
+	TradeID   int           `json:"trade_id"`
+	Size      string        `json:"size"`
+	Message   string        `json:"message"`
+	Channels  []interface{} `json:"channels"`
+	Reason    string        `json:"reason"`
+}
+
+type BitcoinData struct {
+	currentPrice float64
+	holdings     float64
 }
 
 func main() {
@@ -29,19 +34,50 @@ func main() {
 }
 
 func onReady() {
+	data := &BitcoinData{holdings: 0.0}
+
 	systray.SetIcon(getIcon())
 	systray.SetTitle("BTC")
 	systray.SetTooltip("Bitcoin Price Tracker")
 
+	// Add menu items
+	mHoldings := systray.AddMenuItem("Set Holdings", "Enter your Bitcoin amount")
+	mCurrentHoldings := systray.AddMenuItem("Current Holdings: ₿0.00000000", "Your Bitcoin amount")
+	mCurrentHoldings.Disable() // Make it non-clickable
+	systray.AddSeparator()
+	mWorth := systray.AddMenuItem("Current Worth: $0.00", "Value of your holdings")
+	mWorth.Disable() // Make it non-clickable
+	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Quit the app")
 
-	// Start WebSocket connection
-	go connectWebSocket()
+	// Start WebSocket connection with shared data
+	go connectWebSocket(data, mWorth)
 
 	// Handle menu events
 	go func() {
 		for {
 			select {
+			case <-mHoldings.ClickedCh:
+				cmd := exec.Command("osascript", "-e", `tell application "System Events" to display dialog "Enter your Bitcoin holdings:" default answer ""`)
+				output, err := cmd.Output()
+				if err != nil {
+					log.Printf("Dialog error: %v", err)
+					continue
+				}
+
+				parts := strings.Split(string(output), "text returned:")
+				if len(parts) > 1 {
+					input := strings.TrimSpace(strings.TrimRight(parts[1], "\n"))
+					if holdings, err := strconv.ParseFloat(input, 64); err == nil {
+						data.holdings = holdings
+						// Update both holdings display and worth
+						mCurrentHoldings.SetTitle(fmt.Sprintf("Current Holdings: ₿%.8f", data.holdings))
+						if data.currentPrice > 0 {
+							worth := data.holdings * data.currentPrice
+							mWorth.SetTitle(fmt.Sprintf("Current Worth: $%s", addThousandSeparators(worth)))
+						}
+					}
+				}
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				return
@@ -50,14 +86,14 @@ func onReady() {
 	}()
 }
 
-func connectWebSocket() {
+func connectWebSocket(data *BitcoinData, mWorth *systray.MenuItem) {
 	ws, _, err := websocket.DefaultDialer.Dial("wss://ws-feed.exchange.coinbase.com", nil)
 	if err != nil {
 		log.Fatal("WebSocket connection error:", err)
 	}
 	defer ws.Close()
 
-	fmt.Println("Connected to Coinbase WebSocket")
+	log.Println("Connected to Coinbase WebSocket")
 
 	// Updated subscription format
 	subscribe := map[string]interface{}{
@@ -76,17 +112,9 @@ func connectWebSocket() {
 
 	// Listen for messages
 	for {
-		// First, read the raw message to debug
-		_, rawMsg, err := ws.ReadMessage()
-		if err != nil {
-			log.Println("WebSocket read error:", err)
-			continue
-		}
-		fmt.Printf("Raw message: %s\n", string(rawMsg))
-
 		var msg WebSocketMessage
-		if err := json.Unmarshal(rawMsg, &msg); err != nil {
-			log.Println("JSON parse error:", err)
+		if err := ws.ReadJSON(&msg); err != nil {
+			log.Printf("WebSocket error: %v\n", err)
 			continue
 		}
 
@@ -104,8 +132,15 @@ func connectWebSocket() {
 					continue
 				}
 
+				data.currentPrice = floatPrice
 				formattedPrice := addThousandSeparators(floatPrice)
 				systray.SetTitle(fmt.Sprintf("₿ $%s", formattedPrice))
+
+				// Update worth if holdings are set
+				if data.holdings > 0 {
+					worth := data.holdings * floatPrice
+					mWorth.SetTitle(fmt.Sprintf("Current Worth: $%s", addThousandSeparators(worth)))
+				}
 			}
 		}
 	}

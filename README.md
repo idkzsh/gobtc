@@ -11,9 +11,9 @@ A simple Bitcoin price display for the macOS menu bar.
    ```
 3. Create the app bundle:
    ```bash
-   mkdir -p Bitcoin.app/Contents/MacOS
-   cp gobtc Bitcoin.app/Contents/MacOS/
-   cp Info.plist Bitcoin.app/Contents/
-   chmod +x Bitcoin.app/Contents/MacOS/gobtc
-   xattr -cr Bitcoin.app
+   mkdir -p gobtc.app/Contents/MacOS
+   cp gobtc gobtc.app/Contents/MacOS/
+   cp Info.plist gobtc.app/Contents/
+   chmod +x gobtc.app/Contents/MacOS/gobtc
+   xattr -cr gobtc.app
    ```
