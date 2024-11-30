@@ -3,11 +3,15 @@ package main
 import (
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
+
+	"encoding/json"
 
 	"github.com/getlantern/systray"
 	"github.com/gorilla/websocket"
@@ -29,6 +33,7 @@ type WebSocketMessage struct {
 type BitcoinData struct {
 	currentPrice float64
 	holdings     float64
+	usdCadRate   float64
 }
 
 var holdingsFile string
@@ -66,6 +71,9 @@ func onReady() {
 	systray.SetTooltip("Bitcoin Price Tracker")
 
 	// Add menu items
+	mUSD := systray.AddMenuItem("USD", "USD")
+	mUSD.Disable()
+	systray.AddSeparator()
 	mHoldings := systray.AddMenuItem("Set Holdings", "Enter your Bitcoin amount")
 	mCurrentHoldings := systray.AddMenuItem("Current Holdings: ₿0.00000000", "Your Bitcoin amount")
 	mCurrentHoldings.Disable() // Make it non-clickable
@@ -81,7 +89,7 @@ func onReady() {
 	}
 
 	// Start WebSocket connection with shared data
-	go connectWebSocket(data, mWorth)
+	go connectWebSocket(data, mWorth, mUSD)
 
 	// Handle menu events
 	go func() {
@@ -121,7 +129,10 @@ func onReady() {
 	}()
 }
 
-func connectWebSocket(data *BitcoinData, mWorth *systray.MenuItem) {
+func connectWebSocket(data *BitcoinData, mWorth *systray.MenuItem, mUSD *systray.MenuItem) {
+	// Start the FX rate updater
+	go updateUsdCadRate(data)
+
 	ws, _, err := websocket.DefaultDialer.Dial("wss://ws-feed.exchange.coinbase.com", nil)
 	if err != nil {
 		log.Fatal("WebSocket connection error:", err)
@@ -167,14 +178,17 @@ func connectWebSocket(data *BitcoinData, mWorth *systray.MenuItem) {
 					continue
 				}
 
-				data.currentPrice = floatPrice
-				formattedPrice := addThousandSeparators(floatPrice)
-				systray.SetTitle(fmt.Sprintf("₿ $%s", formattedPrice))
+				data.currentPrice = floatPrice * data.usdCadRate // Convert to CAD
+				formattedPrice := addThousandSeparators(data.currentPrice)
+				systray.SetTitle(fmt.Sprintf("₿ $%s CAD", formattedPrice)) // Added CAD label
+
+				// Update mUSD with the USD price
+				mUSD.SetTitle(fmt.Sprintf("USD: $%s", addThousandSeparators(floatPrice)))
 
 				// Update worth if holdings are set
 				if data.holdings > 0 {
-					worth := data.holdings * floatPrice
-					mWorth.SetTitle(fmt.Sprintf("Current Worth: $%s", addThousandSeparators(worth)))
+					worth := data.holdings * data.currentPrice
+					mWorth.SetTitle(fmt.Sprintf("Current Worth: $%s CAD", addThousandSeparators(worth)))
 				}
 			}
 		}
@@ -230,4 +244,43 @@ func loadHoldings() float64 {
 		return 0.0
 	}
 	return holdings
+}
+
+func updateUsdCadRate(data *BitcoinData) {
+	// Function to fetch the rate
+	fetchRate := func() {
+		resp, err := http.Get("https://api.coinbase.com/v2/exchange-rates?currency=USD")
+		if err != nil {
+			log.Printf("FX rate request error: %v\n", err)
+			return
+		}
+		defer resp.Body.Close()
+
+		var result struct {
+			Data struct {
+				Rates map[string]string `json:"rates"`
+			} `json:"data"`
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			log.Printf("FX JSON decode error: %v\n", err)
+			return
+		}
+
+		if cadRate, ok := result.Data.Rates["CAD"]; ok {
+			if rate, err := strconv.ParseFloat(cadRate, 64); err == nil {
+				data.usdCadRate = rate
+				log.Printf("Updated USD/CAD rate: %.4f\n", rate)
+			}
+		}
+	}
+
+	// Fetch immediately on start
+	fetchRate()
+
+	// Then update hourly
+	for {
+		time.Sleep(1 * time.Hour)
+		fetchRate()
+	}
 }
