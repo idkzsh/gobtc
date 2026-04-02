@@ -18,16 +18,16 @@ import (
 )
 
 type WebSocketMessage struct {
-	Type      string        `json:"type"`
-	ProductID string        `json:"product_id"`
-	Price     string        `json:"price"`
-	Side      string        `json:"side"`
-	Time      string        `json:"time"`
-	TradeID   int           `json:"trade_id"`
-	Size      string        `json:"size"`
-	Message   string        `json:"message"`
-	Channels  []interface{} `json:"channels"`
-	Reason    string        `json:"reason"`
+	Type      string `json:"type"`
+	ProductID string `json:"product_id"`
+	Price     string `json:"price"`
+	Side      string `json:"side"`
+	Time      string `json:"time"`
+	TradeID   int    `json:"trade_id"`
+	Size      string `json:"size"`
+	Message   string `json:"message"`
+	Channels  []any  `json:"channels"`
+	Reason    string `json:"reason"`
 }
 
 type BitcoinData struct {
@@ -142,10 +142,10 @@ func connectWebSocket(data *BitcoinData, mWorth *systray.MenuItem, mUSD *systray
 	log.Println("Connected to Coinbase WebSocket")
 
 	// Updated subscription format
-	subscribe := map[string]interface{}{
+	subscribe := map[string]any{
 		"type": "subscribe",
-		"channels": []interface{}{
-			map[string]interface{}{
+		"channels": []any{
+			map[string]any{
 				"name":        "ticker",
 				"product_ids": []string{"BTC-USD"}, // We can try "BTC-CAD" here
 			},
@@ -230,7 +230,7 @@ func getIcon() []byte {
 
 // Add these functions to handle file operations
 func saveHoldings(amount float64) error {
-	return os.WriteFile(holdingsFile, []byte(fmt.Sprintf("%.8f", amount)), 0644)
+	return os.WriteFile(holdingsFile, fmt.Appendf(nil, "%.8f", amount), 0644)
 }
 
 func loadHoldings() float64 {
